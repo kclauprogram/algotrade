@@ -25,16 +25,23 @@ class data_preprocess:
         
         return train_data, test_data
         
-    # This function return a dict of data mean
-    def scaler_fit_mean(self):
+    # This function return a dict of data scalar used
+    def fit(self):
         col_name = self.train_data.columns
         scaling = {}
-        for ticket in col_name:
-            scaling[ticket] = np.mean(self.train_data[ticket])
+        
+        if self.norm_method == 'mean':
+            for ticket in col_name:
+                scaling[ticket] = np.mean(self.train_data[ticket])
+                
+        if self.norm_method == 'day0':
+            for ticket in col_name:
+                scaling[ticket] = self.train_data[ticket].tolist()[0]    
+                                
         return scaling
     
     # This function return df with normalized data
-    def scaler_transform_mean(self):
+    def transform(self):
         data = self.data.copy()
         for element in data.columns:
             data[element] = data[element]/self.scaler[element]
@@ -42,10 +49,11 @@ class data_preprocess:
     
     # control the method of normalization
     def normalize(self):
-        if self.norm_method == 'mean':
-            self.scaler = self.scaler_fit_mean()
-            self.norm_data = self.scaler_transform_mean()
-            return self.split_data(self.norm_data)
+        self.scaler = self.fit()
+        self.norm_data = self.transform()
+        return self.split_data(self.norm_data)        
+            
+        
         
     # Return a dict for the average spread of the pairs
     def get_average_norm_spread(self):
@@ -63,18 +71,20 @@ class data_preprocess:
         
             
 class backtest:
-    def __init__(self, data : object, pairs_list : list , leverage : int, trade_gap : float):
+    def __init__(self, data : object, pairs : object , num_pair : int, leverage : int, trade_gap : float, transaction_cost : float, reload : bool):
         self.price_data = data.test_data
         self.price_norm_data = data.test_norm_data
-        self.pairs_list = pairs_list
         self.average_spread = data.average_spread
+        self.pairs_list = pairs.trade_pair_list[0:num_pair]
+        self.method = pairs.method
         self.leverage = leverage
         self.trade_gap = trade_gap
+        self.transaction_cost = transaction_cost
+        self.reload = reload
         self.backtest()
 
     def trade_execution(self, pair : list):
-
-        trade_record_list = []
+        
         name = pair[0] + '&' + pair[1]
         
         stock1 = self.price_norm_data[pair[0]].values.tolist()
@@ -82,26 +92,43 @@ class backtest:
         stock1_price = self.price_data[pair[0]].values.tolist()
         stock2_price = self.price_data[pair[1]].values.tolist()
         
-        trade_period = min(len(stock1), len(stock2))
+        trade_period = max(len(stock1), len(stock2))
         spread = self.average_spread[name]
         in_position = False
         initial_value = 10000
         
-        first_record = [pair[0], 0, stock1_price[0], pair[1], 0, stock2_price[0], 0, in_position, initial_value]
-        trade_record_list.append(first_record)
+        # [name of stock1, unit of stock1, price of stock1, name of stock2, unit of stock2, price of stock2, time, in_position, profolio value]
+        trade_record_list = [[pair[0], 0, stock1_price[0], pair[1], 0, stock2_price[0], 0, in_position, initial_value]]
         for i in range(1, trade_period):
             
             direction_before = bool(stock1[i-1] >= stock2[i-1])
             direction = bool(stock1[i] >= stock2[i])
             price_cross = (direction_before != direction)
             record_before = trade_record_list[i-1]
-            invest = initial_value * self.leverage
+            invest = min(initial_value * self.leverage, 10000 * self.leverage)
+            #invest = initial_value * self.leverage
             
+            # if stop trade criteria is true, stop the profolio update
+            price_missing = np.isnan(stock1_price[i]) or np.isnan(stock2_price[i]) 
+                       
+            if price_missing:
+                record = record_before
+                record[2] = record_before[2] if np.isnan(stock1_price[i]) else stock1_price[i]
+                record[5] = record_before[5] if np.isnan(stock2_price[i]) else stock2_price[i]
+                record[6] = i
+                in_position = False
+                record[1] = 0
+                record[4] = 0
+                record[7] = in_position
+                trade_record_list.append(record.copy())
+                continue
+                
+                
             # update position status when no event
             if True:
                 record = record_before
-                record[2] = stock1_price[i] if not np.isnan(stock1_price[i]) else record_before[2]
-                record[5] = stock2_price[i] if not np.isnan(stock2_price[i]) else record_before[5]
+                record[2] = stock1_price[i]
+                record[5] = stock2_price[i] 
                 record[6] = i
                 record[8] = initial_value + record[1]*record[2] + record[4]*record[5]
                 
@@ -119,6 +146,7 @@ class backtest:
                 record[1] = 0
                 record[4] = 0
                 record[7] = in_position
+                record[8] = record[8] * (1 - self.transaction_cost)
                 
             # in postion, forcibly liquidate when time end
             if i == trade_period - 1:
@@ -126,13 +154,15 @@ class backtest:
                 record[1] = 0
                 record[4] = 0
                 record[7] = in_position
-                break
             
             trade_record_list.append(record.copy())
-            
-        return trade_record_list
+
+        return trade_record_list[:-1]
 
     def backtest(self):
+        
+        if self.reload:
+            return 0
         
         for pair in self.pairs_list:
             
@@ -140,7 +170,7 @@ class backtest:
             name = pair[0] + '&' + pair[1]
             
             trade_record_df = pd.DataFrame(trade_record, columns=['stock1', 'unit1', 'price1','stock2', 'unit2', 'price2', 'time', 'in_position', 'value'])     
-            trade_record_df.to_csv('D:/project/backtest_result/dtw/' + name + '.csv', index=False)
+            trade_record_df.to_csv('D:/project/backtest_result/' + self.method + '/' + name + '.csv', index=False)
             print(f'Pair: {name} trade execution finished')                
             
         return 0
@@ -149,62 +179,136 @@ class backtest:
     
     
 class review:
-    def __init__(self, pair_list : list, reload : bool):
+    def __init__(self, result : object, reload : bool):
         self.reload = reload
-        self.pair_list = pair_list
+        self.pair_list = result.pairs_list
+        self.method = result.method
+        self.datasize = result.price_data.shape[0]
+        self.tmp_result = np.zeros(len(self.pair_list)).tolist()
         self.aggre_result = self.aggregated_result_output()
         
     def aggregated_result_output(self):
         
-        output_path = 'D:/project/backtest_result/aggre/' + 'meta_dtw' + '.csv'
+        output_path = 'D:/project/backtest_result/aggre/' + self.method + '_aggregated_review.csv'
         
         if self.reload:
             aggregated_result_df = pd.read_csv(output_path)
             return aggregated_result_df
         
-        for pair in self.pair_list:
-            aggregated_result_df = self.aggregated_result(pair)
-            aggregated_result_df.to_csv(output_path, index=False)
+        review_list = []
+        for i in range(len(self.pair_list)):
+            result = self.aggregated_result(i)
+            review_list.append(result)
+        
+        aggregated_result_df = pd.DataFrame(review_list, columns=['num', 'total_return', 'max_down', 'sharpe_ratio' , 'return', 'is_profit'])
+        aggregated_result_df.to_csv('D:/project/backtest_result/aggre/' + self.method + '_aggregated_review.csv', index=False)
             
         return aggregated_result_df
-            
     
-    def aggregated_result(self, pair_list : list):
+    def individual_result(self, pair : list):
         
-        data = pd.read_csv('D:/project/backtest_result/dtw/' + 'GOOG&GOOGL' + '.csv')
+        name = pair[0] + '&' + pair[1]
+        data = pd.read_csv('D:/project/backtest_result/' + self.method + '/' + name + '.csv')
         
-        value = np.zeros(data.shape[0])
-        aggre_result_list = []
-        for pair in pair_list:
-            name = pair[0] + '&' + pair[1]
-            path = 'D:/project/backtest_result/dtw/' + name + '.csv'
-            trade_record = pd.read_csv(path)
-            value += trade_record['value']
+        value = data['value'].tolist()
             
         percentage_change = (value[len(value)-1] - value[0]) / value[0]
+        is_profit = percentage_change > 0
+        
+        print(f'Individual review of {name} finished')
+            
+        return [percentage_change, is_profit]       
+    
+    def aggregated_result(self, index : int):
+
+        name = self.pair_list[index][0] + '&' + self.pair_list[index][1]
+        path = 'D:/project/backtest_result/' + self.method + '/' + name + '.csv'
+        trade_record = pd.read_csv(path)
+            
+        self.tmp_result[index] = trade_record['value'] if index == 0 else trade_record['value'] + self.tmp_result[index-1]
+            
+        value = self.tmp_result[index]
+        indi_result_list = self.individual_result(self.pair_list[index])            
+            
+        total_percentage_change = (value[len(value)-1] - value[0]) / value[0]
         max_down = min(value)/value[0]
-        aggre_result_list = [percentage_change, max_down]
-            
-            
-        print(f'Aggregated {len(pair_list)} review finished')
-            
-        #aggregated_result_df = pd.DataFrame(aggre_result_list, columns=['return', 'max_down'])
         
-        
+        norm_value = value / value[0]
+        sharpe_ratio = (total_percentage_change - 0.05)/np.std(norm_value)
+
+        aggre_result_list = [index+1, total_percentage_change, max_down, sharpe_ratio, indi_result_list[0], indi_result_list[1]]
+    
+        print(f'Aggregated {index+1} review and {name} review finished')
+            
         return aggre_result_list
             
 class review_plot:
     def __init__(self, review : object):
         self.aggre_result = review.aggre_result
+        self.method = review.method
         
     def plot_aggre_result(self):
-        x = range(10, 1000, 10)
-        y = self.aggre_result['value']
+        x = self.aggre_result['num']
+        y = self.aggre_result['total_return']
+        y_2 = self.aggre_result['max_down']
         
         plt.plot(x, y)
+        plt.savefig('D:/project/backtest_result/plot/' + self.method + '_aggre_result_return.png')
         plt.show()
         
-        return 0                    
+        plt.plot(x, y_2)
+        plt.savefig('D:/project/backtest_result/plot/' + self.method + '_aggre_result_maxdown.png')
+        plt.show()
+        
+        return 0
+    
+    def plot_compare_result(self):
+        ssd_data = pd.read_csv('D:/project/backtest_result/aggre/' + 'ssd' + '_aggregated_review.csv')
+        dtw_data = pd.read_csv('D:/project/backtest_result/aggre/' + 'dtw' + '_aggregated_review.csv')
+        
+        x = ssd_data['num']
+        y_ssd = ssd_data['total_return']
+        y_dtw = dtw_data['total_return']
+        
+        plt.plot(x, y_ssd, label='ssd', linestyle='-')
+        plt.plot(x, y_dtw, label='dtw', linestyle='-')
+        plt.grid(True)
+        plt.xlabel('Number of pairs')
+        plt.ylabel('return percentage')
+        plt.title('Comparison of SSD and DTW return over number of pairs')
+        plt.legend()
+        plt.savefig('D:/project/backtest_result/plot/' + 'compare' + '_aggre_result_return.png')
+        plt.show()
+        
+        y_ssd_2 = ssd_data['max_down']
+        y_dtw_2 = dtw_data['max_down']
+        
+        plt.plot(x, y_ssd_2, label='ssd', linestyle='-')
+        plt.plot(x, y_dtw_2, label='dtw', linestyle='-')
+        plt.grid(True)
+        plt.xlabel('Number of pairs')
+        plt.ylabel('Minimum value percentage')
+        plt.title('Comparison of SSD and DTW maximun drawdown over number of pairs')
+        plt.legend()
+        plt.savefig('D:/project/backtest_result/plot/' + 'compare' + '_aggre_result_maxdown.png')
+        plt.show()
+        
+        y_ssd_3 = ssd_data['sharpe_ratio']
+        y_dtw_3 = dtw_data['sharpe_ratio']
+        
+        plt.plot(x, y_ssd_3, label='ssd', linestyle='-')
+        plt.plot(x, y_dtw_3, label='dtw', linestyle='-')
+        plt.grid(True)
+        plt.xlabel('Number of pairs')
+        plt.ylabel('sharpe ratio')
+        plt.title('Comparison of SSD and DTW sharpe ratio over number of pairs')
+        plt.legend()
+        plt.savefig('D:/project/backtest_result/plot/' + 'compare' + '_aggre_result_sharperatio.png')
+        plt.show()
+        
+        return 0
+        
+        
     
         
             
