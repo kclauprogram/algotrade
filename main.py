@@ -7,60 +7,87 @@ from pair_search import mr_test
 import pandas as pd
 import numpy as np
 import dtw
+from sklearn.linear_model import LinearRegression
 import matplotlib.pyplot as plt
 import random
+import statsmodels.api as sm
 
-#backtest
-def main():
-    path = 'D:\project\data\sp500_new\summary.csv'
+def main_train():
+    path = 'D:\\project\\data\\sp500_new\\summary.csv'
+    raw_data = pd.read_csv(path)
+    
+    test_data = raw_data.head(20)
+    test_data = test_data[['A', 'AAPL', 'ANSS', 'AOS']]
+    
+    data = data_preprocess(raw_data, 'day0', 1000)
+    #pair_data_ssd = pair_search(data = data, method = 'ssd', corr_method = 'reg', reload = True)
+    pair_data_dtw = pair_search(data = data, method = 'dtw', corr_method = 'reg', reload = False)
+    
+    #print(pair_data_ssd.corr_dict)
+    bt_result_dtw = backtest(data = data, pairs = pair_data_dtw ,
+                         num_pair = 1000, leverage = 30, trade_gap = 2, transaction_cost = 0, reload = False)
+    
+    result_dtw = review(bt_result_dtw, reload = False)
+    plot_dtw = review_plot(result_dtw)
+    
+    plot_dtw.plot_aggre_result()
+    
+    
+    return 0
+
+def main_plot():
+    path = 'D:\\project\\data\\sp500_new\\summary.csv'
     raw_data = pd.read_csv(path)
     
     data = data_preprocess(raw_data, 'day0', 1000)
-    pair_data = pair_search(df = data.train_norm_data, method = 'ssd', reload = False)
-    
-    bt_result = backtest(data = data, pairs = pair_data , num_pair = 1000, leverage = 20, trade_gap = 1.75, reload = False)
-    
-    return 0
-
-def main3():
-    path = 'D:\project\data\sp500_new\summary.csv'
-    raw_data = pd.read_csv(path)
-    
-    data = data_preprocess(raw_data, 'mean', 1000)
-    pair_data = dtw_pair_search(data.train_norm_data, True)
-    
-    pair_list = pair_data.dtw_list[0:1000]
-    #mr_data = mr_test(data.train_norm_data, pair_list, True).mr_list[0:1000]
-    
-    #mr_df = pd.DataFrame(mr_data, columns=['pair1', 'pair2', 'dist', 'mr'])
-    #mr_df = mr_df[~mr_df['mr']]
-    
-    #mr_list = mr_df.values.tolist()
-    tmp = []
-    for pair in pair_list:
-        name = pair[0] + "&" + pair[1]
-        bt_res = pd.read_csv('D:/project/backtest_result/dtw/' + name + '.csv')
-        bt_res = bt_res['value'].to_list()[-1]
-        tmp.append(bt_res)
-    print(tmp)
-    
-    print(np.mean(tmp))
-    backtest(data, pair_list, 20, 1.75)
-    
-    return 0
-
-#data explore
-def main2():
-    path = 'D:\project\data\sp500\summary.csv'
-    raw_data = pd.read_csv(path)
-    
-    data = data_preprocess(raw_data, 'mean', 1000)
-    pair_data = dtw_pair_search(data.train_norm_data, True)
-    pair_list = pair_data.dtw_list[0:1000]
+    pair_data_ssd = pair_search(data = data, method = 'ssd', reload = True)
+    pair_data_dtw = pair_search(data = data, method = 'dtw', reload = True)
     
     data2 = data.train_norm_data
     test_pair = ['A', 'TGT'] #
     test_pair2 = ['V', 'WMT']
+    
+    pair_list = [['KO', 'PEP']]
+    pair_list = [pair_data_ssd.trade_pair_list[199]]
+    
+    for pair in pair_list:
+    
+        pair_name = pair[0] + "&" + pair[1]
+        stock1 = data2[pair[0]]
+        stock2 = data2[pair[1]]
+        x = range(len(stock1))
+        
+        if pair_name == 'CL&SO' or pair_name ==  'OMC&RTX':
+            spread = stock1 - stock2
+            sd = np.std(spread)
+            print(f"{sd} {pair_name}")
+            
+        plt.title(f"Comparison of top 200 SSD pair {pair[0]} & {pair[1]}")
+        plt.plot(x, stock1, label=pair[0], linestyle='-')
+        plt.plot(x, stock2, label=pair[1], linestyle='-')
+        plt.grid(True)
+        plt.savefig('D:\\project\\backtest_result\\plot\\day0dtw200.png')
+        plt.show()
+    
+    
+    
+    
+    return 0
+
+#data explore
+def main_explore():
+    path = 'D:\\project\\data\\sp500_new\\summary.csv'
+    raw_data = pd.read_csv(path)
+    
+    data = data_preprocess(raw_data, 'mean', 1000)
+    pair_data_ssd = pair_search(data = data, method = 'ssd', reload = True)
+    pair_data_dtw = pair_search(data = data, method = 'dtw', reload = True)
+    
+    data2 = data.train_norm_data
+    test_pair = ['A', 'TGT'] #
+    test_pair2 = ['V', 'WMT']
+    
+    pair_list = ['KO', 'PEP']
     
     for pair in pair_list:
     
@@ -71,7 +98,7 @@ def main2():
         foo, bar = tmp.index1, tmp.index2
         tmp2 = foo - bar # x-y
         tmp2 = np.array(tmp2, dtype=int)
-        print(len(tmp2))
+        print(tmp2)
         
         hist, bins = np.histogram(tmp2, bins=max(tmp2)-min(tmp2)+1)
         plt.bar(bins[:-1], hist, width=np.diff(bins), align='edge')
@@ -88,70 +115,126 @@ def main2():
     return 0
 
 #result review
-def main4():
+def main_review():
     
-    path = 'D:\project\data\sp500_new\summary.csv'
+    path = 'D:\\project\\data\\sp500_new\\summary.csv'
     raw_data = pd.read_csv(path)
     
+    train_control = True
+    
     data = data_preprocess(raw_data, 'day0', 1000)
-    pair_data = pair_search(data = data, method = 'ssd', reload = True)
-    pairs_list = pair_data.trade_pair_list[0:1000]
+    pair_data_ssd = pair_search(data = data, method = 'ssd', corr_method = None, reload = train_control)
+    pair_data_dtw = pair_search(data = data, method = 'dtw', corr_method = None, reload = train_control)
+    #pairs_list = pair_data.trade_pair_list[0:1000]
     
     master_control = False
-    bt_result = backtest(data = data, pairs = pair_data ,
-                         num_pair = 1000, leverage = 20, trade_gap = 1.75, transaction_cost = 0, reload = master_control)
-    result = review(bt_result, reload = master_control)
-    plotting = review_plot(result)
-    tpm =plotting.plot_aggre_result()
-    tpp =plotting.plot_compare_result()
     
+    bt_result_ssd = backtest(data = data, pairs = pair_data_ssd ,
+                         num_pair = 1000, leverage = 30, trade_gap = 2.5, transaction_cost = 0, reload = master_control)
+    bt_result_dtw = backtest(data = data, pairs = pair_data_dtw ,
+                         num_pair = 1000, leverage = 30, trade_gap = 2.5, transaction_cost = 0, reload = master_control)
+    #"""
+    result_ssd = review(bt_result_ssd, reload = master_control)
+    result_dtw = review(bt_result_dtw, reload = master_control)
+    
+    plot_ssd = review_plot(result_ssd)
+    plot_dtw = review_plot(result_dtw)
+    
+    #plot_ssd.plot_aggre_result()
+    #plot_dtw.plot_aggre_result()
+    plot_dtw.plot_all_compare_result()
+    #"""
     return 0
 
-# mr testing
-def main5():
-    
-    
-    path = 'D:\project\data\sp500_new\summary.csv'
+
+
+
+
+
+
+
+
+
+
+
+def mpt():
+    path = 'D:\\project\\data\\sp500_new\\summary.csv'
     raw_data = pd.read_csv(path)
     
     data = data_preprocess(raw_data, 'mean', 1000)
-    pair_data = dtw_pair_search(data.train_norm_data, True)
+    pair_data_ssd = pair_search(data = data, method = 'ssd', reload = True)
+    pair_data_dtw = pair_search(data = data, method = 'dtw', reload = True)
+   
+    pairs_list = pair_data_ssd.trade_pair_list[0:1000]
+    data2 = data.train_norm_data
     
-    pair_list = pair_data.dtw_list[0:1000]
-    #pair_list = [['GOOG', 'GOOGL']]
     
-    result = mr_test(data.train_norm_data, pair_list, False).mr_list
-    print(result[3])
+    pair_list = [['KO', 'PEP']]
+    for pair in pair_list:
+        stock1 = np.array(data2[pair[0]]).reshape(-1, 1) 
+        stock2 = np.array(data2[pair[1]])
         
+        # fit a model
+        reg = LinearRegression(fit_intercept=False)
+        model = reg.fit(stock1, stock2)
+        
+        
+        
+        
+        y_pred = model.predict( stock1)
+
+        # Print coefficients
+        print(f"Intercept: {model.intercept_}")
+        print(f"Coefficient: {model.coef_[0]}")
+
+        print(model.score(stock1, stock2))
+
+        # Plot the regression line
+        plt.scatter( stock1, stock2, color='blue', label="Data points")
+        plt.plot( stock1, y_pred, color='red', label="Regression line")
+        plt.legend()
+        plt.show()
+        
+        
+        print(model)
+   
     return 0
 
-def mpt():
-    ssd_data = pd.read_csv('D:/project/backtest_result/aggre/' + 'ssd' + '_aggregated_review.csv')
-    dtw_data = pd.read_csv('D:/project/backtest_result/aggre/' + 'dtw' + '_aggregated_review.csv')
-        
-    x = ssd_data['num']
-    y_ssd = ssd_data['total_return']
-    y_dtw = dtw_data['total_return']
-        
-    plt.plot(x, y_ssd, label='ssd', linestyle='-')
-    plt.plot(x, y_dtw, label='dtw', linestyle='-')
-    plt.xlabel('num')
-    plt.ylabel('return')
-    plt.grid(True)
-    plt.show()
-    plt.savefig('D:/project/backtest_result/plot/' + 'compare' + '_aggre_result_return.png')
-    plt.close()
-        
-    y_ssd_2 = ssd_data['max_down']
-    y_dtw_2 = dtw_data['max_down']
-        
-    plt.plot(x, y_ssd_2, label='ssd', linestyle='-')
-    plt.plot(x, y_dtw_2, label='dtw', linestyle='-')
-    plt.grid(True)    
-    plt.savefig('D:/project/backtest_result/plot/' + 'compare' + '_aggre_result_maxdown.png')
-    plt.show()
+def mpt2():
+    path = 'D:\\project\\data\\sp500_new\\summary.csv'
+    raw_data = pd.read_csv(path)
     
+    data = data_preprocess(raw_data, 'mean', 1000)
+    pair_data_ssd = pair_search(data = data, method = 'ssd', corr_method = '', reload = True)
+    #pair_data_dtw = pair_search(data = data, method = 'dtw', reload = True)
+   
+    pairs_list = pair_data_ssd.trade_pair_list[0:1000]
+    data2 = data.train_norm_data
+    
+    #tmp = pair_data_ssd.corr_dict
+    #print(tmp)
+    
+    pair_list = [['KO', 'PEP']]
+    for pair in pair_list:
+        
+        stock1 = data2[pair[0]]
+        stock2 = data2[pair[1]]
+        
+        # fit a model
+        reg = sm.OLS(stock1, stock2)
+        model = reg.fit()
+        beta = model.params
+        beta = beta[pair[1]]
+        
+        print(beta.dtype)
+        print(stock2 * beta)
+        
+        
+        #print(model.summary())
+        
+        
+      
     return 0
 
-main4()
-#mpt()
+main_review()
+#mpt2()
